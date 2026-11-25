@@ -2,7 +2,8 @@ import time
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.widgets import Header, RichLog, Input, Footer, Static
+from textual.widgets import Header, Input, Footer, Static
+from textual.binding import Binding
 from textual.containers import VerticalScroll
 from engine import create_engine
 
@@ -16,6 +17,7 @@ class AssistantMessage(Static):
         super().__init__("", markup=False)
         self.add_class("assistant")
         self._buf = ""
+        
 
     def add_token(self, token: str):
         self._buf += token
@@ -27,11 +29,15 @@ class AssistantMessage(Static):
 class ChatApp(App):
     TITLE = "CyperAgent"
     CSS_PATH = "static/styles.css"
-    BINDINGS = [("ctrl+q", "quit", "exit")]
+    BINDINGS = [
+        ("ctrl+q", "quit", "exit"),
+        Binding("escape", "quit_turn", "Quit current turn")
+    ]
 
     def __init__(self, engine):
         super().__init__()
         self.engine = engine
+        self._current_turn = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -50,36 +56,51 @@ class ChatApp(App):
         prompt = self.query_one("#prompt", Input)
         prompt.value = ""
         prompt.disabled = True
-        self.run_turn(text)
+        self._current_turn = self.run_turn(text)
+
+    def action_quit_turn(self):
+        try:
+            self._current_turn.cancel()
+        except:
+            return False
+        return False
             
 
     @work(exclusive=True)
     async def run_turn(self, text):
-        transcript = self.query_one("#transcript", VerticalScroll)
-        status = self.query_one("#status", Static)
-
-        transcript = self.query_one("#transcript", VerticalScroll)
-        await transcript.mount(UserMessage(text))
-        assistant = AssistantMessage()
-        await transcript.mount(assistant)
-
-        status.update("✻ Thinking…")
-        last = 0.0
-        async for token in self.engine.stream_turn(text):
-            assistant.add_token(token)
+        try:
+            transcript = self.query_one("#transcript", VerticalScroll)
+            status = self.query_one("#status", Static)
+    
+            transcript = self.query_one("#transcript", VerticalScroll)
+            await transcript.mount(UserMessage(text))
+            assistant = AssistantMessage()
+            await transcript.mount(assistant)
+    
+            status.update("✻ Thinking…")
+            last = 0.0
+            async for token in self.engine.stream_turn(text):
+                assistant.add_token(token)
+                status.update("")
+                now = time.monotonic()
+                if now - last > 0.06:
+                    last = now
+                    if transcript.is_vertical_scroll_end:
+                        transcript.scroll_end(animate=False)
+    
+            if transcript.is_vertical_scroll_end:
+                transcript.scroll_end(animate=False)
             status.update("")
-            now = time.monotonic()
-            if now - last > 0.06:
-                last = now
-                if transcript.is_vertical_scroll_end:
-                    transcript.scroll_end(animate=False)
-
-        if transcript.is_vertical_scroll_end:
-            transcript.scroll_end(animate=False)
-        status.update("")
-        prompt = self.query_one("#prompt", Input)
-        prompt.disabled = False
-        prompt.focus()
+            prompt = self.query_one("#prompt", Input)
+            prompt.disabled = False
+            prompt.focus()
+            return None
+        except Exception as e:
+            self.log("Exception", e)
+            return None
+        finally:
+            prompt.disabled = False
+            prompt.focus()
 
 if __name__ == "__main__":
     ChatApp(create_engine()).run()
