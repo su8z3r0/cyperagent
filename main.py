@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 from textual import work
@@ -25,6 +26,11 @@ class AssistantMessage(Static):
 
     def text(self) -> str:
         return self._buf
+
+class ErrorMessage(Static):
+    def __init__(self):
+        super().__init__("error", markup=False)
+        self.add_class("error")
 
 class ChatApp(App):
     TITLE = "CyperAgent"
@@ -68,9 +74,11 @@ class ChatApp(App):
 
     @work(exclusive=True)
     async def run_turn(self, text):
+        
         try:
             transcript = self.query_one("#transcript", VerticalScroll)
             status = self.query_one("#status", Static)
+            prompt = self.query_one("#prompt", Input)
     
             transcript = self.query_one("#transcript", VerticalScroll)
             await transcript.mount(UserMessage(text))
@@ -91,14 +99,17 @@ class ChatApp(App):
             if transcript.is_vertical_scroll_end:
                 transcript.scroll_end(animate=False)
             status.update("")
-            prompt = self.query_one("#prompt", Input)
             prompt.disabled = False
             prompt.focus()
             return None
+        except asyncio.CancelledError:
+            status.update("Messaggio interrotto...")
+            raise 
         except Exception as e:
             self.log("Exception", e)
             return None
         finally:
+            status.update("")
             prompt.disabled = False
             prompt.focus()
 
