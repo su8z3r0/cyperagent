@@ -1,91 +1,85 @@
-from dotenv import load_dotenv, dotenv_values
-from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
-from langchain.messages import AIMessage, AIMessageChunk, ToolMessage
+import time
 
-if not load_dotenv():
-    print("Failed to load .env file")
-    quit()
+from textual import work
+from textual.app import App, ComposeResult
+from textual.widgets import Header, RichLog, Input, Footer, Static
+from textual.containers import VerticalScroll
+from engine import create_engine
 
+class UserMessage(Static):
+    def __init__(self, text: str):
+        super().__init__(f"you › {text}", markup=False)
+        self.add_class("user")
 
-config = dotenv_values(".env")
-llm_base_url = config["LLM_BASE_URL"]
-llm_api_key = config["LLM_API_KEY"]
-llm_model = config["LLM_MODEL"]
-llm_model_provider = config["LLM_MODEL_PROVIDER"]
+class AssistantMessage(Static):
+    def __init__(self):
+        super().__init__("", markup=False)
+        self.add_class("assistant")
+        self._buf = ""
 
-def get_weather(city: str) -> str:
-    """Get weather for a given city."""
-    return f"It's always sunny in {city}!"
+    def add_token(self, token: str):
+        self._buf += token
+        self.update(self._buf)
 
-llm = ChatOpenAI(
-    base_url=llm_base_url,
-    api_key=llm_api_key,
-    model=llm_model,
-    temperature=0.1
-)
+    def text(self) -> str:
+        return self._buf
 
-agent = create_agent(
-    model=llm,
-    tools=[get_weather],
-    system_prompt="You are a helpful assistant"
-)
+class ChatApp(App):
+    TITLE = "CyperAgent"
+    CSS_PATH = "static/styles.css"
+    BINDINGS = [("ctrl+q", "quit", "exit")]
 
-messages = []
-try:
-    while True:
-        try:
-            text = input(">> ").strip()
-        except:
-            break
+    def __init__(self, engine):
+        super().__init__()
+        self.engine = engine
 
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield VerticalScroll(id="transcript")
+        yield Static("", id="status")
+        yield Input(id="prompt")
+        yield Footer()
+
+    def on_mount(self):
+        self.query_one('#prompt', Input).focus()
+
+    def on_input_submitted(self, event):
+        text = event.value.strip()
         if not text:
-            continue
-
-        if text in ("quit", "exit"):
-            print("Bye!")
-            quit()
-
-        if text == "clear":
-            messages = []
-            print("Storia azzerata")
-            continue
-
-        messages.append({
-            "role": "user",
-            "content": text
-        })
-
-        final_state = None
-        shown = 0
-
-        for mode, payload in agent.stream(
-            {"messages": messages},
-            stream_mode = ["messages", "values"]
-        ):
+            return
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = ""
+        prompt.disabled = True
+        self.run_turn(text)
             
-            if mode == "messages":
-                chunk, meta = payload
-                if isinstance(chunk, AIMessageChunk):
-                    if chunk.text:
-                        print(chunk.text, end="", flush=True)
-                    for tc in chunk.tool_call_chunks:
-                        if tc.get("name"):
-                            print(f"\n[tool] {tc['name']}...", end="", flush=True)
-            else:
-                final_state = payload
-                for msg in payload["messages"][shown:]:
-                    shown += 1
-                    if isinstance(msg, AIMessage) and msg.tool_calls:
-                        for tc in msg.tool_calls:
-                            print(f"\n[tool call] {tc['name']}({tc['args']})")
-                    elif isinstance(msg, ToolMessage):
-                        print(f"\n[tool result] {msg.content}")
 
-        print()
-        messages = final_state["messages"]
+    @work(exclusive=True)
+    async def run_turn(self, text):
+        transcript = self.query_one("#transcript", VerticalScroll)
+        status = self.query_one("#status", Static)
 
-except KeyboardInterrupt:
-    pass
+        transcript = self.query_one("#transcript", VerticalScroll)
+        await transcript.mount(UserMessage(text))
+        assistant = AssistantMessage()
+        await transcript.mount(assistant)
 
-print("\nBye!")
+        status.update("✻ Thinking…")
+        last = 0.0
+        async for token in self.engine.stream_turn(text):
+            assistant.add_token(token)
+            status.update("")
+            now = time.monotonic()
+            if now - last > 0.06:
+                last = now
+                if transcript.is_vertical_scroll_end:
+                    transcript.scroll_end(animate=False)
+
+        if transcript.is_vertical_scroll_end:
+            transcript.scroll_end(animate=False)
+        status.update("")
+        prompt = self.query_one("#prompt", Input)
+        prompt.disabled = False
+        prompt.focus()
+
+if __name__ == "__main__":
+    ChatApp(create_engine()).run()
