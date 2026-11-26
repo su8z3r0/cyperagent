@@ -28,8 +28,8 @@ class AssistantMessage(Static):
         return self._buf
 
 class ErrorMessage(Static):
-    def __init__(self):
-        super().__init__("error", markup=False)
+    def __init__(self, error_message: str):
+        super().__init__(f"Error: {error_message}", markup=False)
         self.add_class("error")
 
 class ChatApp(App):
@@ -44,6 +44,7 @@ class ChatApp(App):
         super().__init__()
         self.engine = engine
         self._current_turn = None
+        self._turn_seq = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -57,12 +58,18 @@ class ChatApp(App):
 
     def on_input_submitted(self, event):
         text = event.value.strip()
+        
         if not text:
             return
+
+        if not self._current_turn is None and self._current_turn.is_running:
+            return
+        
+        self._turn_seq += 1        
         prompt = self.query_one("#prompt", Input)
         prompt.value = ""
         prompt.disabled = True
-        self._current_turn = self.run_turn(text)
+        self._current_turn = self.run_turn(text, self._turn_seq)
 
     def action_quit_turn(self):
         try:
@@ -73,7 +80,7 @@ class ChatApp(App):
             
 
     @work(exclusive=True)
-    async def run_turn(self, text):
+    async def run_turn(self, text, seq: int):
         
         try:
             transcript = self.query_one("#transcript", VerticalScroll)
@@ -107,6 +114,7 @@ class ChatApp(App):
             raise 
         except Exception as e:
             self.log("Exception", e)
+            await transcript.mount(ErrorMessage(e))
             return None
         finally:
             status.update("")
