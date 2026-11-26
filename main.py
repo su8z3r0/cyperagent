@@ -18,7 +18,6 @@ class AssistantMessage(Static):
         super().__init__("", markup=False)
         self.add_class("assistant")
         self._buf = ""
-        
 
     def add_token(self, token: str):
         self._buf += token
@@ -26,6 +25,10 @@ class AssistantMessage(Static):
 
     def text(self) -> str:
         return self._buf
+
+    def stop_message(self):
+        self._buf += ' interrotto'
+        self.update(self._buf)
 
 class ErrorMessage(Static):
     def __init__(self, error_message: str):
@@ -86,10 +89,9 @@ class ChatApp(App):
             transcript = self.query_one("#transcript", VerticalScroll)
             status = self.query_one("#status", Static)
             prompt = self.query_one("#prompt", Input)
-    
-            transcript = self.query_one("#transcript", VerticalScroll)
-            await transcript.mount(UserMessage(text))
             assistant = AssistantMessage()
+    
+            await transcript.mount(UserMessage(text))
             await transcript.mount(assistant)
     
             status.update("✻ Thinking…")
@@ -109,8 +111,9 @@ class ChatApp(App):
             prompt.disabled = False
             prompt.focus()
             return None
-        except asyncio.CancelledError:
-            status.update("Messaggio interrotto...")
+        except asyncio.CancelledError as cancelled:
+            assistant.stop_message()
+            self.log("CancelledError", cancelled)
             raise 
         except Exception as e:
             self.log("Exception", e)
