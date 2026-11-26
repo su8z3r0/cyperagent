@@ -27,7 +27,7 @@ class AssistantMessage(Static):
         return self._buf
 
     def stop_message(self):
-        self._buf += ' interrotto'
+        self._buf += "\nMessaggio interrotto\n"
         self.update(self._buf)
 
 class ErrorMessage(Static):
@@ -40,7 +40,7 @@ class ChatApp(App):
     CSS_PATH = "static/styles.css"
     BINDINGS = [
         ("ctrl+q", "quit", "exit"),
-        Binding("escape", "quit_turn", "Quit current turn")
+        Binding("escape", "stop_turn", "Stop current turn")
     ]
 
     def __init__(self, engine):
@@ -61,39 +61,42 @@ class ChatApp(App):
 
     def on_input_submitted(self, event):
         text = event.value.strip()
-        
+
         if not text:
             return
 
-        if not self._current_turn is None and self._current_turn.is_running:
+        if self._current_turn is not None and self._current_turn.is_running:
             return
-        
-        self._turn_seq += 1        
+
+        self._turn_seq += 1
+        turn_id = self._turn_seq
         prompt = self.query_one("#prompt", Input)
         prompt.value = ""
         prompt.disabled = True
-        self._current_turn = self.run_turn(text, self._turn_seq)
+        self._current_turn = self.run_turn(text, turn_id)
 
-    def action_quit_turn(self):
-        try:
-            self._current_turn.cancel()
-        except:
-            return False
-        return False
-            
+    def action_stop_turn(self):
+        if self._current_turn is None or not self._current_turn.is_running:
+            return
+        self._current_turn.cancel()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "stop_turn":
+            return self._current_turn is not None and self._current_turn.is_running
+        return super().check_action(action, parameters)
 
     @work(exclusive=True)
     async def run_turn(self, text, seq: int):
-        
+
         try:
             transcript = self.query_one("#transcript", VerticalScroll)
             status = self.query_one("#status", Static)
             prompt = self.query_one("#prompt", Input)
             assistant = AssistantMessage()
-    
+
             await transcript.mount(UserMessage(text))
             await transcript.mount(assistant)
-    
+
             status.update("✻ Thinking…")
             last = 0.0
             async for token in self.engine.stream_turn(text):
@@ -104,25 +107,24 @@ class ChatApp(App):
                     last = now
                     if transcript.is_vertical_scroll_end:
                         transcript.scroll_end(animate=False)
-    
+
             if transcript.is_vertical_scroll_end:
                 transcript.scroll_end(animate=False)
-            status.update("")
-            prompt.disabled = False
-            prompt.focus()
             return None
         except asyncio.CancelledError as cancelled:
             assistant.stop_message()
             self.log("CancelledError", cancelled)
-            raise 
+            raise
         except Exception as e:
             self.log("Exception", e)
             await transcript.mount(ErrorMessage(e))
             return None
         finally:
-            status.update("")
-            prompt.disabled = False
-            prompt.focus()
+            if seq == self._turn_seq:
+                status.update("")
+                prompt.disabled = False
+                prompt.focus()
+                self._current_turn = None
 
 if __name__ == "__main__":
     ChatApp(create_engine()).run()
